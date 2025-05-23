@@ -1,0 +1,8 @@
+numpy
+scipy
+scikit-learn
+SimpleITK
+vtk
+# slicer 和 sitkUtils 通常为 3D Slicer 环境自带模块
+# slicer
+# sitkUtils
