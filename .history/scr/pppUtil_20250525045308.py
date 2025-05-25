@@ -1813,7 +1813,7 @@ def getNod(data, mNam=''):
             mod.CreateDefaultDisplayNodes()
             return mod
         elif isinstance(nod, slicer.vtkMRMLVolumeNode):
-            ut.setSliceViewerLayers(nod, fit=True) 
+            ut.setSliceViewerLayers(nod, fit=True)
     return nod
 
 # tag getArr 获取🔢 ✅
@@ -3400,7 +3400,8 @@ class CtPj:
                     # ePjPs = pdPj(sPs, (self.eSp, self.sDrt))
                     # ePjPs = psPj(sPs, (self.eSp, self.sDrt))[:, None] + self.sDrt*rgN_(1,.3)
                     ePjPs = psPj(sPs, (self.eSp, self.sDrt))
-                    self.pds = ndA(list(nx3ps_(pd))+list(nx3ps_(ePjPs)))
+                    ips, ctps = CtPj(ePjPs, 1.)
+                    self.pds = ndA(list(nx3ps_(ips))+list(nx3ps_(sPs)))
                     self.ctPs = dotCut(self.ctPs, (self.eSp, - self.sDrt), thr=0)
                     self.inGps = dotCut(self.inGps, (self.eSp, - self.sDrt))
                 pds2Mod(self.pds, mNam=sNam(self.mNam, 'cPds'))
