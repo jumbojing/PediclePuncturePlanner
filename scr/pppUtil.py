@@ -339,11 +339,20 @@ def pdCln(Pd):
     cleaner.Update()
     return cleaner.GetOutput()
 
-# ========== 裁切相关接口统一导入 ==========
-from .vtkCut import (
-    vtkcrop, vtkPln, vtkPlns, vtkCut, dotCut, dotPlnX, DotCut,
-    vtkPlnCrop, rePln_, addPlns, vtkCplnCrop, vtkPs, vtkNors, SPln, ps_pn, dotPn
-)
+# ========== 裁切相关依赖导入 ==========
+import numpy as np
+import vtk
+import slicer
+try:
+    from .vtkCut import (
+        vtkcrop, vtkPln, vtkPlns, vtkCut, dotCut, dotPlnX, DotCut,
+        vtkPlnCrop, rePln_, addPlns, vtkCplnCrop, vtkPs, vtkNors, SPln, ps_pn, dotPn
+    )
+except ImportError:
+    from vtkCut import (
+        vtkcrop, vtkPln, vtkPlns, vtkCut, dotCut, dotPlnX, DotCut,
+        vtkPlnCrop, rePln_, addPlns, vtkCplnCrop, vtkPs, vtkNors, SPln, ps_pn, dotPn
+    )
 
 # ========== 移除本地裁切相关实现，仅保留接口调用 ==========
 def vtkCplnCrop(pln, mPd, mNam='', refP=None, **kw):
