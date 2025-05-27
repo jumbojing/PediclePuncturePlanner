@@ -18,6 +18,7 @@ from pppUtil import *
 EPS = 1e-6
 OP = np.zeros(3)
 TLDIC = {}
+XP = ndA(1.,0,0); print(XP)
 # 简写函数
 puSk = PullVolumeFromSlicer
 skPu = PushVolumeToSlicer

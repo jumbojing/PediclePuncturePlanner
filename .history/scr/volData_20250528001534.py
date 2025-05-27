@@ -18,6 +18,7 @@ from pppUtil import *
 EPS = 1e-6
 OP = np.zeros(3)
 TLDIC = {}
+XP = ndA(1.,0,0); print(XP)
 # 简写函数
 puSk = PullVolumeFromSlicer
 skPu = PushVolumeToSlicer
@@ -720,23 +721,6 @@ def arr2vol(vol: Union[slicer.vtkMRMLVolumeNode, str] = None, arr=0, mNam: str =
     
     return volData(cVol) if rtnVd else cVol
 
-def getI2rMat(vol, isArr=True):
-    """获取IJK到RAS变换矩阵"""
-    vol = getNod(vol)
-    mat = vtk.vtkMatrix4x4()
-    vol.GetIJKToRASMatrix(mat)
-    if isArr:
-        return slicer.util.arrayFromVTKMatrix(mat)
-    return mat
-
-def getR2iMat(vol, arr=True):
-    """获取RAS到IJK变换矩阵"""
-    vol = getNod(vol)
-    mat = vtk.vtkMatrix4x4()
-    vol.GetRASToIJKMatrix(mat)
-    if arr:
-        return slicer.util.arrayFromVTKMatrix(mat)
-    return mat
 
 def cropVol(vol, roi=None, mNam: str = '', cArr=None, delV: bool = True):
     """裁剪体素（优化版）"""
@@ -796,12 +780,3 @@ def volClone_backup(vol, nam=''):
     except:
         print("警告: 无法克隆体素")
         return vol
-    
-# ========== 裁切相关API接口整理 ==========
-__all__ = [
-    'volData', 'vks2Ras', 'ras2vks', 'readIsoCT', 'arr2vol',
-    'getI2rMat', 'getR2iMat', 'cropVol', 'volClone_backup'
-]
-
-# ========== 文件结尾注释 ========== 
-# 裁切相关API全部集中于本文件，便于统一维护和调用。    

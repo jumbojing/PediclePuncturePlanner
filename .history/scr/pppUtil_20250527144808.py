@@ -342,6 +342,64 @@ def pdCln(Pd):
     cleaner.Update()
     return cleaner.GetOutput()
 
+# ========== 裁切相关依赖导入 ==========
+import numpy as np
+import vtk
+import slicer
+try:
+    from .vtkCut import (
+        vtkcrop, vtkPln, vtkPlns, vtkCut, dotCut, dotPlnX, DotCut,
+        vtkPlnCrop, rePln_, addPlns, vtkCplnCrop, vtkPs, vtkNors, SPln, ps_pn, dotPn
+    )
+except ImportError:
+    from vtkCut import (
+        vtkcrop, vtkPln, vtkPlns, vtkCut, dotCut, dotPlnX, DotCut,
+        vtkPlnCrop, rePln_, addPlns, vtkCplnCrop, vtkPs, vtkNors, SPln, ps_pn, dotPn
+    )
+
+# ========== 移除本地裁切相关实现，仅保留接口调用 ==========
+def vtkCplnCrop(pln, mPd, mNam='', refP=None, **kw):
+    """闭合面裁剪"""
+    mPd = getPd(mPd)
+    if isLs(pln):
+        pln = vtkPlns(pln, cPlns=True, refP=refP, **kw)
+    clip = vtk.vtkClipClosedSurface()
+    clip.SetInputData(mPd)
+    clip.SetClippingPlanes(pln)
+    clip.Update()
+    pd = clip.GetOutput()
+    pd = cnnEx(pd, mNam, **kw)
+    return pd
+
+def addPlns(funs, refP=None):
+    """添加多个平面"""
+    funs = ndA(funs)
+    clipFun = vtk.vtkImplicitBoolean()
+    clipFun.SetOperationTypeToUnion()
+    if funs.ndim == 2:
+        clipFun.AddFunction(vtkPln(funs, refP=refP))
+    elif funs.ndim == 3:
+        for fun in funs:
+            clipFun.AddFunction(vtkPln(fun, refP=refP))  
+    else:
+        raise TypeError("Unsupported type for funs: {}".format(type(funs)))
+    return clipFun
+
+def vtkPlns(pns: Any, mPd=None, mNam='', pdLs=False, cPlns=False, refP=None, **kw):
+    """生成VTK平面集合"""
+    pns = ndA(pns)
+    if cPlns:
+        plns = vtk.vtkPlaneCollection()
+        for pn in pns:
+            plns.AddItem(vtkPln(pn, refP=refP, cPlns=False))
+        if mPd is not None:
+            return vtkCplnCrop(plns, mPd, mNam=mNam, **kw)
+    else:
+        plns = addPlns(pns, refP)
+        if mPd is not None:
+            return vtkPln(mPd, plns, mNam=mNam, **kw)        
+    return plns
+
 
 def cnnEx(mPd, mNam='', *, sp=None, exTyp: Lit['All', 'Lg', None] = None, pdn=False):
     """连通区提取"""
@@ -656,6 +714,170 @@ def pdCp(pdata, mNam=''):
         addFid(cp, mNam)
     return cp
 
+def getI2rMat(vol, isArr=True):
+    """获取IJK到RAS变换矩阵"""
+    vol = getNod(vol)
+    mat = vtk.vtkMatrix4x4()
+    vol.GetIJKToRASMatrix(mat)
+    if isArr:
+        return slicer.util.arrayFromVTKMatrix(mat)
+    return mat
+
+def getR2iMat(vol, arr=True):
+    """获取RAS到IJK变换矩阵"""
+    vol = getNod(vol)
+    mat = vtk.vtkMatrix4x4()
+    vol.GetRASToIJKMatrix(mat)
+    if arr:
+        return slicer.util.arrayFromVTKMatrix(mat)
+    return mat
+
+def ras2vks(ps, reVol=None, lb=1, pvks=True, mNam=''):
+    """将RAS坐标系中的点集转换为体素坐标系"""
+    if reVol is None:
+        reVol = SCEN.GetFirstNodeByClass(LVOL)
+    else:
+        reVol = getNod(reVol)
+
+    mat = getR2iMat(reVol)
+    vArr = getArr(reVol)
+
+    ps = getArr(ps)
+    pShp = ps.shape
+    if len(pShp) > 2:
+        ps = nx3ps_(ps)
+
+    ps1 = np.ones((len(ps), 1))
+    ps4 = np.hstack((ps, ps1))
+
+    ijk = (ps4 @ mat.T)[:, :3]
+    ijk = ijk.astype(int)
+
+    ijk = np.clip(ijk, a_min=0, a_max=ndA(vArr.shape)[::-1] - 1)
+
+    z = ijk[:, 0]
+    y = ijk[:, 1]
+    x = ijk[:, 2]
+
+    if pvks:
+        varr = vArr.copy()
+        varr = vArr[x, y, z]
+        if lb != 0:
+            varr = np.where(varr != 0, lb, 0)
+        if len(pShp) > 2:
+            varr = varr.reshape(pShp[:-1])
+        return varr, ijk
+
+    mArr = np.zeros_like(vArr)
+    mArr[x, y, z] = lb
+    if lb == 0:
+        mArr[x, y, z] = 1
+        mArr *= vArr
+    if mNam != '':
+        vol = volClone(reVol, mNam)
+        slicer.util.updateVolumeFromArray(vol, mArr)
+    return mArr
+
+def cropVol(vol, roi=None, mNam='', cArr=None, delV=True):
+    """裁剪体素"""
+    vNod = getNod(vol)
+    if roi is None:
+        # Remove lVol2mpd and volData usage, just return the ROI node and cropped volume
+        # If bounding box is needed, use pdBbx with vNod directly
+        rNod = pdBbx(vNod, mNam)[-1]
+    else:
+        rNod = getNod(roi)
+    cropLg = slicer.modules.cropvolume.logic()
+    cropMd = slicer.vtkMRMLCropVolumeParametersNode()
+    cropMd.SetROINodeID(rNod.GetID())
+    cropMd.SetInputVolumeNodeID(vNod.GetID())
+    cropMd.SetVoxelBased(True)
+    cropLg.FitROIToInputVolume(cropMd)
+    cropLg.Apply(cropMd)
+    cropVol = SCEN.GetNodeByID(cropMd.GetOutputVolumeNodeID())
+    if mNam != '':
+        cropVol.SetName(mNam)
+    if cArr is not None:
+        slicer.util.updateVolumeFromArray(cropVol, cArr[:, ::-1])
+    if delV:
+        SCEN.RemoveNode(vNod)
+    if roi is None:
+        return rNod, cropVol
+    return cropVol
+
+volClone = lambda vol, nam='': slicer.modules.volumes.logic().CloneVolumeGeneric(SCEN, vol, nam)
+
+def arr2vol(vol=None, arr=0, mNam='', rtnVd=False, pad=1):
+    """数组转体素"""
+    # Remove type hints that reference VOL, as VOL is not a valid type in this context
+    if vol is None:
+        vol = SCEN.GetFirstNodeByClass("vtkMRMLLabelMapVolumeNode")
+    else:    
+        vol = getNod(vol)
+    cVol = volClone(vol, mNam)
+    vArr = getArr(cVol)
+    if not isinstance(arr, np.ndarray):
+        arr = np.ones_like(vArr) * arr
+        arr = np.pad(arr, pad, mode='constant')
+    else:
+        arr = np.pad(arr, pad, mode='constant')
+    slicer.util.updateVolumeFromArray(cVol, arr.astype(vArr.dtype))
+    return cVol
+
+def readIsoCT(ctF, mNam='', isLb=True, cstU8=True):
+    """读取CT并初始化"""
+    spc = (1, 1, 1)
+    if os.path.exists(ctF):
+        img = sitk.ReadImage(ctF)
+    else:
+        img = puSk(ctF)
+    if cstU8 == True:
+        img = sitk.Cast(img, sitk.sitkUInt8)
+    spcOr = img.GetSpacing()
+    reSpl = sitk.ResampleImageFilter()
+    if spcOr != spc:
+        sizOr = img.GetSize()
+        siz = [int(round(osz * osp / sp)) for osz, osp, sp in zip(sizOr, spcOr, spc)]
+        itpltor = [sitk.sitkLinear, sitk.sitkNearestNeighbor][isLb]
+        reSpl.SetSize(siz)
+        reSpl.SetOutputSpacing(spc)
+        reSpl.SetInterpolator(itpltor)
+        reSpl.SetOutputDirection(img.GetDirection())
+        reSpl.SetOutputOrigin(img.GetOrigin())
+        reSpl.SetDefaultPixelValue(0)
+        reSpl.SetTransform(sitk.Transform())
+        img = reSpl.Execute(img)
+        img = sitk.DICOMOrient(img, 'RAS')
+    vol = skPu(img, None, mNam, SVOL if isLb == False else LVOL)
+    vol.SetOrigin(OP)
+    vol.SetSpacing(spc)
+    return vol
+
+def vks2Ras(vmData, vks=None, lbs=False):
+    """体素坐标转RAS坐标"""
+    def vks2Ps__(vks, vMat):
+        vks = ndA(np.where(vks != 0)).T[:, ::-1]
+        arr1 = np.ones((*vks.shape[:-1], 1))
+        ijk = np.hstack((vks, arr1))
+        ps = (ijk @ vMat.T)[:, :3]
+        return ps
+    
+    if not isinstance(vmData, np.ndarray):
+        vMat = getI2rMat(vmData)
+        if vks is None:
+            vks = getArr(vmData)
+    else:
+        vMat = vmData
+    if lbs is False:
+        return vks2Ps__(vks, vMat)
+    else:
+        lbs = np.unique(vks)
+        lbs = lbs[lbs != 0]
+        lbRas = {}
+        for lb in lbs:
+            lv = TLDIC[lb]
+            lbRas[lv] = vks2Ps__(vks == lb, vMat)
+    return lbRas
 
 def addFid(p=OP, mNam='', dia=3):
     """添加标记点"""
@@ -1014,6 +1236,67 @@ def vCir30(nor=NZ, rad=1., cp=OP, mNam=''):
         ps2cFids(cir, mNam, None, 1, 1.)
     return cir, lambda r, p=cp: bCir_*r+p
 
+def psMic(pds, inGps=None, nor=None, stp=1.0, mNam='', mxIt=20):
+    """计算点集的最大内切圆"""
+    ps = getArr(pds)
+    psT = kdT(ps)
+    
+    if nor is None:
+        nor = psFitPla(ps)
+    else:
+        nor = ndA(nor)
+        if nor.shape == (2,3):
+            nor, drt = nor
+            
+    if inGps is None:
+        gCp = ps.mean(0)
+        mnDt = findPs(ps, gCp)[1]
+        gps = obGps(ps, nor, flat=True)
+        inGps = gps[kdOlbs_(gps, mnDt, gCp, False)[0]]
+    else:
+        inGps = getArr(inGps)
+        if pds is None:
+            gCp = inGps.mean(0)
+            mnDt = findPs(ps, gCp)[1]
+
+    cir_ = vCir30(nor)[-1]
+
+    def mnMx(gps):
+        """找到最优点和实际半径"""
+        dts = psT.query(gps, k=1)[0]
+        mxId = np.argmax(dts)
+        cp = gps[mxId]
+        rad = psT.query(cp[None], k=1)[0][0]
+        return cp, rad
+
+    cp, rad = mnMx(inGps)
+    best_cp, best_rad = cp, rad
+    i = 0
+
+    while (stp >= EPS and i < mxIt):
+        ps_ = cir_(stp, cp)
+        cp_, rad_ = mnMx(ps_)
+
+        rOpt = (rad_ - rad) / rad
+        dOpt = norm(cp-cp_) / (stp * 2.0)
+
+        if (dOpt <= 1.0 and rOpt > -0.05 and rOpt/dOpt > -0.1):
+            cp, rad = cp_, rad_
+            if rad > best_rad:
+                best_cp, best_rad = cp, rad
+
+        stp *= 0.7
+        i += 1
+
+    cp, rad = best_cp, best_rad
+
+    actual_rad = psT.query(cp[None], k=1)[0][0]
+    if abs(actual_rad - rad) > EPS:
+        print(f"警告: 实际半径({actual_rad:.4f})与计算半径({rad:.4f})不匹配")
+        rad = actual_rad
+    arr = vCir30(nor, rad, cp, mNam)[0]
+    return cp, rad, arr
+
 def lnXpln(pn, p0, p1=None):
     """计算平面和直线的交点"""
     p, n = ndA(pn)
@@ -1028,24 +1311,118 @@ def lnXpln(pn, p0, p1=None):
     def dt(p=p): return np.dot(p - p0, n) / d
     return p0 + dt() * v, dt
 
-# ========== 相关API接口整理 ==========
-__all__ = [
-    'p2pLn', 'p3Cone', 'findPs', 'psRoll_', 'psFitPla',
-    'pdCln', 'cnnEx', 'spCnnex', 'pds2Mod', 'ls2dic_',
-    'getPd', 'arr2pd', 'clonePd', 'getNod', 'getArr',
-    'pdBbx', 'getObt', 'obBx', 'obGps', 'addRoi',
-    'pdCp', 'addFid', 'ps2cFids', 'pdPj',
-    'psPj', 'oriMat', 'kdOlbs_', 'mxNorPs_',
-    'rayCast', 'log_', 'zoom', 'c2s_', 
-    'dic2Pd', 'pd2Dic', 'lsDic',
-    'pdAndPds', 'vtkGridPln', 
-    'vtkPush', 'p3Angle',
-    'rdrgsRot', 
-    'thrGrid',
-]
+def erod_(msk, gps, its=3, sp=0, r=1/3):
+    """分离弱连接区域并保留主体"""
+    msk = ndA(msk)
+    s = np.array([[0, r, 0], [r, 1, r], [0, r, 0]])
+    edMsk = erod(msk, s, its)
+    lbs, num = scLb(edMsk)
+    
+    if sp is not None:
+        if np.all(sp == 0):
+            msk_ = (lbs == delBdMsk_(lbs))
+        else:
+            try:
+                spId = findPs(gps, sp)[-1]
+                spLb = lbs[spId]
+                msk_ = (lbs == spLb)
+            except:
+                print("警告: 种子点处理失败，使用最大连通区域")
+                msk_ = (lbs == delBdMsk_(lbs))
+    else:
+        msk_ = (lbs == delBdMsk_(lbs))
+    
+    ctPs = gps[msk_^dila_(msk_, 1)]
+    ctPs = psLbs(ctPs)
+    return gps[msk_], ctPs
 
-# ========== 文件结尾注释 ========== 
-# 裁切相关API全部集中于本文件，便于统一维护和调用。
+def delBdMsk_(lbs_, mxCnt=10):
+    """判断区域是否接触边界并按点数筛选"""
+    if not isinstance(lbs_, np.ndarray):
+        raise TypeError("Input must be a numpy array")
+    if lbs_.ndim != 2 or lbs_.size == 0:
+        return np.array([], dtype=int)
 
+    bdMsk = np.zeros_like(lbs_, dtype=bool)
+    bdMsk[[0, -1], :] = bdMsk[:, [0, -1]] = True
+    
+    msk = ~np.isin(lbs_, np.unique(lbs_[bdMsk]))
+    
+    cnts = np.bincount(lbs_.ravel() * msk.ravel())
+    mxLb = np.array([np.argmax(cnts[1:])+1])
+    
+    return mxLb.astype(int)
+
+def dila_(msk, delCt=3, knlTyp='enhanced', r=.3, lb=None):
+    """增强型膨胀操作"""
+    if knlTyp == 'full':
+        s = np.ones((3,3)) * r
+    elif knlTyp == 'cross':
+        s = np.array([[0, r, 0], [r, r, r], [0, r, 0]])
+    elif knlTyp == 'enhanced':   
+        s = np.array([[0, r, r, r, 0], [r, r, r, r, r], [r, r, r, r, r],
+                      [r, r, r, r, r], [0, r, r, r, 0]])
+    
+    for _ in range(delCt):
+        msk = dila(msk, s)
+        msk |= dila(msk, np.array([[0, r, 0], [r, r, r], [0, r, 0]]))
+    
+    return msk
+
+def psLbs(ps, num=1, rad=1.0, mnSps=5, ax=2, mNam=''):
+    """聚类点云分群函数"""
+    from sklearn.cluster import DBSCAN
+    ps = getArr(ps)
+    if rad is None:
+        from sklearn.neighbors import NearestNeighbors
+        def kDst_():
+            nbs = NearestNeighbors(n_neighbors=mnSps)
+            nbs.fit(ps)
+            dsts, _ = nbs.kneighbors(ps)
+            return dsts[:, -1]
+        rad = np.percentile(kDst_(), 95)
+        print(f"自动计算邻域半径: {rad:.2f} mm")
+    
+    clt = DBSCAN(rad, min_samples=mnSps).fit(ps)
+    cLbs_ = clt.labels_
+    lbs_ = np.unique(cLbs_[cLbs_ >= 0])
+    num_ = len(lbs_)
+    
+    if num is not None:
+        if num_ < num:
+            print(f"警告：可能过分割，建议减小rad（当前{rad}）或增大mnSps（当前{mnSps}）")
+        elif np.sum(clt.labels_ == -1) > len(ps)*0.3:
+            print(f"警告：噪声点超过30%，建议增大rad（当前{rad}）或减小mnSps（当前{mnSps}）")
+        
+        if num == 1:
+            cnts = np.bincount(cLbs_[cLbs_ >= 0])
+            mxLb = np.argmax(cnts)
+            cPs = ps[cLbs_ == mxLb]
+            if mNam != '': 
+                pds2Mod(cPs, mNam=mNam)
+            return cPs
+            
+        if num_ > num:
+            sizes = [(lb, np.sum(cLbs_ == lb)) for lb in lbs_]
+            stLbs = sorted(sizes, key=lambda x: x[1])[-num:]
+            lbs_ = np.array([lb for lb, _ in stLbs])
+            
+        clts = []
+        meds = []
+        
+        for lb in lbs_:
+            clt = ps[cLbs_ == lb]
+            clts.append(clt)
+            meds.append(np.median(clt[:, ax]))
+        
+        stClts = [clts[i] for i in np.argsort(meds)]
+    else:
+        stClts = [ps[cLbs_ == lb] for lb in lbs_]
+        
+    if mNam:
+        for i, cPs in enumerate(stClts):
+            pds2Mod(cPs, mNam=f"{mNam}_{i}")
+    
+    return stClts
 print('funEnd')
 #%%

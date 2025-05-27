@@ -1028,24 +1028,5 @@ def lnXpln(pn, p0, p1=None):
     def dt(p=p): return np.dot(p - p0, n) / d
     return p0 + dt() * v, dt
 
-# ========== 相关API接口整理 ==========
-__all__ = [
-    'p2pLn', 'p3Cone', 'findPs', 'psRoll_', 'psFitPla',
-    'pdCln', 'cnnEx', 'spCnnex', 'pds2Mod', 'ls2dic_',
-    'getPd', 'arr2pd', 'clonePd', 'getNod', 'getArr',
-    'pdBbx', 'getObt', 'obBx', 'obGps', 'addRoi',
-    'pdCp', 'addFid', 'ps2cFids', 'pdPj',
-    'psPj', 'oriMat', 'kdOlbs_', 'mxNorPs_',
-    'rayCast', 'log_', 'zoom', 'c2s_', 
-    'dic2Pd', 'pd2Dic', 'lsDic',
-    'pdAndPds', 'vtkGridPln', 
-    'vtkPush', 'p3Angle',
-    'rdrgsRot', 
-    'thrGrid',
-]
-
-# ========== 文件结尾注释 ========== 
-# 裁切相关API全部集中于本文件，便于统一维护和调用。
-
 print('funEnd')
 #%%

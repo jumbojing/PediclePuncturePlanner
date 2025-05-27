@@ -18,6 +18,7 @@ from pppUtil import *
 EPS = 1e-6
 OP = np.zeros(3)
 TLDIC = {}
+XP = ndA(1.,0,0); print(XP)
 # 简写函数
 puSk = PullVolumeFromSlicer
 skPu = PushVolumeToSlicer
@@ -796,12 +797,3 @@ def volClone_backup(vol, nam=''):
     except:
         print("警告: 无法克隆体素")
         return vol
-    
-# ========== 裁切相关API接口整理 ==========
-__all__ = [
-    'volData', 'vks2Ras', 'ras2vks', 'readIsoCT', 'arr2vol',
-    'getI2rMat', 'getR2iMat', 'cropVol', 'volClone_backup'
-]
-
-# ========== 文件结尾注释 ========== 
-# 裁切相关API全部集中于本文件，便于统一维护和调用。    

@@ -29,9 +29,6 @@ import slicer
 from sitkUtils import PullVolumeFromSlicer, PushVolumeToSlicer
 import SimpleITK as sitk
 
-from volData import *
-from ctPj import *
-from vtkCut import *
 # 设置numpy打印选项
 np.set_printoptions(precision=4, suppress=True)
 
@@ -282,7 +279,7 @@ def p2pLn(p0: P, p1: Opt[P] = None, nor: Opt[P] = None, plus: float = 0.,
         dspNod.SetGlyphType(6)
         dspNod.SetGlyphSize(dia)
         if mNam[-1] == '_':
-            p3Cone(pt, nors, rad=dia*1.4, high=dia*4, mNam=sNam(mNam, "pt"))
+            p3Cone(pt, nor, rad=dia*1.4, high=dia*4, mNam=sNam(mNam, "pt"))
     return pt, nor, dst, lambda l=dst, p=p0, n=nor: p+l*n
 
 def p3Cone(bP, drt=None, mNam='', rad=1, high=3, seg=6, hP=None, rP=None, *kw):
@@ -342,6 +339,191 @@ def pdCln(Pd):
     cleaner.Update()
     return cleaner.GetOutput()
 
+def dotPlnX(pds, pln, eqX=0, rtnPjx=False, isIn=False):
+    """平面裁剪点集"""
+    pds = getArr(pds)
+    ps = nx3ps_(pds)
+    
+    if isinstance(pln, (tuple, list, np.ndarray)):
+        if len(pln) == 2:
+            op, nor = ndA(pln)
+        else:
+            nor = ndA(pln)
+            op = ps.mean(0)
+    else:
+        pln = getNod(pln)
+        op, nor = ndA(pln.GetOrigin(), pln.GetNormal())
+    
+    pjs = (ps - op) @ nor
+    
+    if eqX is not None:
+        if eqX == 0:
+            return ps[np.argmin(abs(pjs))]
+        elif abs(eqX) == 1:
+            lb = (pjs * eqX) > 0
+            return ps[lb]
+        else:
+            lb = pjs == eqX
+            return ps[lb]
+    else:
+        ids = pjs > 0
+        if isIn:
+            return ids
+    
+    if rtnPjx:
+        return pjs, lambda ids=ids: list(ps[ids])
+    return ps[ids], ps[~ids]
+
+def ps_pn(pds, pn, typ='min'):
+    """在点集中找到距离平面最近或最远的点"""
+    pds = nx3ps_(pds)
+    op, nor = ndA(pn)
+    pjs = (pds-op) @ nor
+    
+    if typ == 'min':
+        id_ = np.argmin(abs(pjs))
+        dst = abs(pjs[id_])
+    elif typ == 'max':
+        id_ = np.argmax(pjs)
+        dst = abs(pjs[id_])
+    elif typ is None:
+        id_ = range(len(pjs))
+        dst = np.sort(pjs)
+    else:
+        raise ValueError("typ参数必须是'min','max'或None。")        
+    if 0 <= id_ < len(pds):
+        return pds[id_], dst, id_
+    else:
+        raise IndexError(f"索引{id_}超出给定点集范围。")
+
+def rePln_(pns, refP=None):
+    """重新定向法向量"""
+    plns = ndA(pns)
+    if refP is None: 
+        return plns 
+    if plns.ndim == 2:
+        op, nor = plns
+        vec = refP - op
+        return op, nor * np.sign(vec @ nor)
+    else:
+        ops = plns[:,0]
+        nors = plns[:,1]
+        vecs = refP - ops
+        dots = np.einsum('ij,ij->i', vecs, nors)
+        return ops, nors * np.sign(dots)[:,None]
+
+def vtkPln(pln, mPd: vtk.vtkPolyData = None, mNam: str = '', 
+           refP: PS = None, cPlns: bool = False, **kw):
+    """创建VTK平面"""
+    if not isinstance(pln, vtk.vtkPlane):
+        op, nor = rePln_(pln, refP)
+        pln = vtk.vtkPlane()
+        pln.SetOrigin(tuple(op))
+        pln.SetNormal(tuple(nor))
+    if mNam != '' and mPd is None:
+        SPln(nor, op, mNam)
+    if cPlns:
+        cPln = vtk.vtkPlaneCollection()
+        cPln.AddItem(pln)
+        if mPd is not None:
+            return vtkCplnCrop(cPln, mPd, mNam=mNam, **kw)
+        return cPln
+    if mPd is not None:
+        mPd = vtkPlnCrop(mPd, pln, mNam=mNam, **kw)
+        return mPd
+    return pln
+
+def SPln(nor: PS, cp: PS, mNam: str = "") -> any:
+    """创建Slicer平面"""
+    pln = SNOD('vtkMRMLMarkupsPlaneNode', mNam)
+    pln.SetCenter(cp)
+    pln.SetNormal(nor)
+    return pln
+
+def vtkPlnCrop(mPd, fun, refP=None, inPd=False, mNam='', **kw):
+    """平面裁剪"""
+    pd = getPd(mPd)
+    if isLs(fun):
+        fun = addPlns(fun, refP)
+    clp = vtk.vtkClipPolyData()
+    clp.SetInputData(pd)
+    clp.SetClipFunction(fun)
+    clp.GenerateClippedOutputOn()
+    clp.Update()
+    pd = clp.GetOutput()
+    pd = cnnEx(pd, mNam, **kw)
+    pd0 = clp.GetClippedOutput()
+    if inPd:
+        pd0 = cnnEx(pd0, sNam(mNam,'0'), **kw)
+        return pd0, pd
+    return pd
+
+def vtkCplnCrop(pln, mPd, mNam='', refP=None, **kw):
+    """闭合面裁剪"""
+    mPd = getPd(mPd)
+    if isLs(pln):
+        pln = vtkPlns(pln, cPlns=True, refP=refP, **kw)
+    clip = vtk.vtkClipClosedSurface()
+    clip.SetInputData(mPd)
+    clip.SetClippingPlanes(pln)
+    clip.Update()
+    pd = clip.GetOutput()
+    pd = cnnEx(pd, mNam, **kw)
+    return pd
+
+def addPlns(funs, refP=None):
+    """添加多个平面"""
+    funs = ndA(funs)
+    clipFun = vtk.vtkImplicitBoolean()
+    clipFun.SetOperationTypeToUnion()
+    if funs.ndim == 2:
+        clipFun.AddFunction(vtkPln(funs, refP=refP))
+    elif funs.ndim == 3:
+        for fun in funs:
+            clipFun.AddFunction(vtkPln(fun, refP=refP))  
+    else:
+        raise TypeError("Unsupported type for funs: {}".format(type(funs)))
+    return clipFun
+
+def vtkPlns(pns: Any, mPd=None, mNam='', pdLs=False, cPlns=False, refP=None, **kw):
+    """生成VTK平面集合"""
+    pns = ndA(pns)
+    if cPlns:
+        plns = vtk.vtkPlaneCollection()
+        for pn in pns:
+            plns.AddItem(vtkPln(pn, refP=refP, cPlns=False))
+        if mPd is not None:
+            return vtkCplnCrop(plns, mPd, mNam=mNam, **kw)
+    else:
+        plns = addPlns(pns, refP)
+        if mPd is not None:
+            return vtkPlnCrop(mPd, plns, mNam=mNam, **kw)        
+    return plns
+
+def vtkCut(mPd, pln, mNam='', pad=3, lmd=False, **kw):
+    """VTK切割"""
+    def vtkCutter__(mPd, pln):
+        cutter = vtk.vtkCutter()
+        cutter.SetInputData(mPd)
+        cutter.SetCutFunction(pln)
+        cutter.Update()
+        pd = cutter.GetOutput()
+        return cnnEx(pd, mNam, **kw)
+    
+    mPd = getPd(mPd)
+    if isinstance(pln, tuple):
+        op, nor = pln
+        pln = vtkPln((op, nor), mNam=mNam)
+    elif isinstance(pln, str):
+        sPn = getNod(mPd)
+        pln = vtkPln((sPn.GetOrigin(), sPn.GetNormal()))
+    else:
+        pln = vtkPln((pdCp(mPd), pln))
+
+    pd = vtkCutter__(mPd, pln)
+    if lmd:
+        return pd, lambda nor=nor, op=op: vtkCutter__(mPd, vtkPln((op, nor)))
+    return pd
 
 def cnnEx(mPd, mNam='', *, sp=None, exTyp: Lit['All', 'Lg', None] = None, pdn=False):
     """连通区提取"""
@@ -417,9 +599,7 @@ def pds2Mod(pds, mNam: str = '', psRad=9., refPd=None, **kw):
     if refPd is not None:
         if isinstance(refPd, dict):
             pdC = pd2Dic(getPd(pds))
-            # Remove usage of refRd, as it is undefined
-            # pdC = pdC | refRd
-            pass
+            pdC = pdC | refPd
         else:
             pdC = pd2Dic(refPd) 
             pdC['points'] = arr
@@ -656,6 +836,269 @@ def pdCp(pdata, mNam=''):
         addFid(cp, mNam)
     return cp
 
+def getI2rMat(vol, isArr=True):
+    """获取IJK到RAS变换矩阵"""
+    vol = getNod(vol)
+    mat = vtk.vtkMatrix4x4()
+    vol.GetIJKToRASMatrix(mat)
+    if isArr:
+        return slicer.util.arrayFromVTKMatrix(mat)
+    return mat
+
+def getR2iMat(vol, arr=True):
+    """获取RAS到IJK变换矩阵"""
+    vol = getNod(vol)
+    mat = vtk.vtkMatrix4x4()
+    vol.GetRASToIJKMatrix(mat)
+    if arr:
+        return slicer.util.arrayFromVTKMatrix(mat)
+    return mat
+
+def ras2vks(ps, reVol=None, lb=1, pvks=True, mNam=''):
+    """将RAS坐标系中的点集转换为体素坐标系"""
+    if reVol is None:
+        reVol = SCEN.GetFirstNodeByClass(LVOL)
+    else:
+        reVol = getNod(reVol)
+
+    mat = getR2iMat(reVol)
+    vArr = getArr(reVol)
+
+    ps = getArr(ps)
+    pShp = ps.shape
+    if len(pShp) > 2:
+        ps = nx3ps_(ps)
+
+    ps1 = np.ones((len(ps), 1))
+    ps4 = np.hstack((ps, ps1))
+
+    ijk = (ps4 @ mat.T)[:, :3]
+    ijk = ijk.astype(int)
+
+    ijk = np.clip(ijk, a_min=0, a_max=ndA(vArr.shape)[::-1] - 1)
+
+    z = ijk[:, 0]
+    y = ijk[:, 1]
+    x = ijk[:, 2]
+
+    if pvks:
+        varr = vArr.copy()
+        varr = vArr[x, y, z]
+        if lb != 0:
+            varr = np.where(varr != 0, lb, 0)
+        if len(pShp) > 2:
+            varr = varr.reshape(pShp[:-1])
+        return varr, ijk
+
+    mArr = np.zeros_like(vArr)
+    mArr[x, y, z] = lb
+    if lb == 0:
+        mArr[x, y, z] = 1
+        mArr *= vArr
+    if mNam != '':
+        vol = volClone(reVol, mNam)
+        slicer.util.updateVolumeFromArray(vol, mArr)
+    return mArr
+
+def cropVol(vol, roi=None, mNam='', cArr=None, delV=True):
+    """裁剪体素"""
+    vNod = getNod(vol)
+    if roi is None:
+        rNod = pdBbx(lVol2mpd(vNod, exTyp="All"), mNam)[-1]
+    else:
+        rNod = getNod(roi)
+    cropLg = slicer.modules.cropvolume.logic()
+    cropMd = slicer.vtkMRMLCropVolumeParametersNode()
+    cropMd.SetROINodeID(rNod.GetID())
+    cropMd.SetInputVolumeNodeID(vNod.GetID())
+    cropMd.SetVoxelBased(True)
+    cropLg.FitROIToInputVolume(cropMd)
+    cropLg.Apply(cropMd)
+    cropVol = SCEN.GetNodeByID(cropMd.GetOutputVolumeNodeID())
+    if mNam != '':
+        cropVol.SetName(mNam)
+    if cArr is not None:
+        slicer.util.updateVolumeFromArray(cropVol, cArr[:, ::-1])
+    if delV:
+        SCEN.RemoveNode(vNod)
+    if roi is None:
+        return rNod, volData(cropVol, mNam, exTyp="All")
+    return volData(cropVol, mNam, exTyp="All")
+
+volClone = lambda vol, nam='': slicer.modules.volumes.logic().CloneVolumeGeneric(SCEN, vol, nam)
+
+def arr2vol(vol: Union[VOL, str]=None, arr=0, mNam='', rtnVd=False, pad=1) -> VOL:
+    """数组转体素"""
+    if vol is None:
+        vol = SCEN.GetFirstNodeByClass("vtkMRMLLabelMapVolumeNode")
+    else:    
+        vol = getNod(vol)
+    cVol = volClone(vol, mNam)
+    vArr = getArr(cVol)
+    if not isinstance(arr, np.ndarray):
+        arr = np.ones_like(vArr) * arr
+        arr = np.pad(arr, pad, mode='constant')
+    else:
+        arr = np.pad(arr, pad, mode='constant')
+    slicer.util.updateVolumeFromArray(cVol, arr.astype(vArr.dtype))
+    return volData(cVol) if rtnVd else cVol
+
+def lVol2mpd(lVol, mNam='', **kw):
+    """标签体素转模型"""
+    vol = getNod(lVol)
+    assert isinstance(vol, slicer.vtkMRMLLabelMapVolumeNode), f'{type(vol)=}必须是标签体素'
+    seg = SNOD('vtkMRMLSegmentationNode')
+    segLg = slicer.modules.segmentations.logic()
+    segLg.ImportLabelmapToSegmentationNode(vol, seg)
+    segs = seg.GetSegmentation()
+    segn = segs.GetNumberOfSegments()
+    getId = segs.GetNthSegmentID
+
+    def getSeg_(ii=0, mNam=mNam, **kw):
+        segId = getId(ii)
+        pd = vtk.vtkPolyData()
+        segLg.GetSegmentClosedSurfaceRepresentation(seg, segId, pd, 1)
+        return cnnEx(pd, mNam=mNam, pdn=True, **kw)
+    
+    if segn == 1:
+        pdc = getSeg_(0, mNam, **kw)
+    else:
+        pdc = {}
+        for i in range(segn):
+            id_ = getId(i)
+            lb = segs.GetSegment(id_).GetLabelValue()
+            lv = TLDIC[lb]
+            mNam_ = mNam+str(lv) if mNam != '' else ''
+            pdc[lv] = getSeg_(i, mNam_, **kw)
+    slicer.mrmlScene.RemoveNode(seg)
+    return pdc
+
+def readIsoCT(ctF, mNam='', isLb=True, cstU8=True):
+    """读取CT并初始化"""
+    spc = (1, 1, 1)
+    if os.path.exists(ctF):
+        img = sitk.ReadImage(ctF)
+    else:
+        img = puSk(ctF)
+    if cstU8 == True:
+        img = sitk.Cast(img, sitk.sitkUInt8)
+    spcOr = img.GetSpacing()
+    reSpl = sitk.ResampleImageFilter()
+    if spcOr != spc:
+        sizOr = img.GetSize()
+        siz = [int(round(osz * osp / sp)) for osz, osp, sp in zip(sizOr, spcOr, spc)]
+        itpltor = [sitk.sitkLinear, sitk.sitkNearestNeighbor][isLb]
+        reSpl.SetSize(siz)
+        reSpl.SetOutputSpacing(spc)
+        reSpl.SetInterpolator(itpltor)
+        reSpl.SetOutputDirection(img.GetDirection())
+        reSpl.SetOutputOrigin(img.GetOrigin())
+        reSpl.SetDefaultPixelValue(0)
+        reSpl.SetTransform(sitk.Transform())
+        img = reSpl.Execute(img)
+        img = sitk.DICOMOrient(img, 'RAS')
+    vol = skPu(img, None, mNam, SVOL if isLb == False else LVOL)
+    vol.SetOrigin(OP)
+    vol.SetSpacing(spc)
+    return volData(vol, mNam)
+
+def volData(vol, mNam='', **kw):
+    """体素数据处理类"""
+    class imInfo:
+        def __init__(self, vol):
+            self.vol = getNod(vol, mNam)
+            self.nam = self.vol.GetName()
+
+        @property
+        def update(self):
+            if not hasattr(self, '_update'):
+                self._update = slicer.util.updateVolumeFromArray(self.vol, self.arr)
+            return self._update
+
+        @property
+        def arr(self):
+            if not hasattr(self, '_arr'):
+                self._arr = getArr(self.nam)
+            return self._arr
+
+        @property
+        def imData(self):
+            if not hasattr(self, '_imData'):
+                self._imData = self.vol.GetImageData()
+            return self._imData
+
+        @property
+        def op(self):
+            if not hasattr(self, '_op'):
+                self._op = self.vol.GetOrigin()
+            return self._op
+        
+        @property
+        def spc(self):
+            if not hasattr(self, '_spc'):
+                self._spc = self.vol.GetSpacing()
+            return self._spc
+
+        @property
+        def mat(self):
+            if not hasattr(self, '_mat'):
+                self._mat = getI2rMat(self.vol)
+            return self._mat
+
+        @property
+        def ps(self):
+            if not hasattr(self, '_ps'):
+                self._ps = vks2Ras(self.vol, lbs=True)
+            return self._ps
+
+        @property
+        def mod(self):
+            if not hasattr(self, '_mod'):
+                self._mod = lVol2mpd(self.vol, mNam, **kw)
+            return self._mod
+
+        @property
+        def pd(self):
+            if not hasattr(self, '_pd'):
+                self._pd = lVol2mpd(self.vol, **kw)
+            return self._pd
+
+        @property
+        def lbs(self):
+            if not hasattr(self, '_lbs'):
+                self._lbs = np.unique(self.arr)
+                self._lbs = self._lbs[self._lbs != 0].astype(np.int8)
+            return self._lbs
+    
+    imProp = imInfo(vol)
+    assert np.max(imProp.arr) != 0, f'the volume data of {imProp.vol.GetName()} is empty'
+    return imProp
+
+def vks2Ras(vmData, vks=None, lbs=False):
+    """体素坐标转RAS坐标"""
+    def vks2Ps__(vks, vMat):
+        vks = ndA(np.where(vks != 0)).T[:, ::-1]
+        arr1 = np.ones((*vks.shape[:-1], 1))
+        ijk = np.hstack((vks, arr1))
+        ps = (ijk @ vMat.T)[:, :3]
+        return ps
+    
+    if not isinstance(vmData, np.ndarray):
+        vMat = getI2rMat(vmData)
+        if vks is None:
+            vks = getArr(vmData)
+    else:
+        vMat = vmData
+    if lbs is False:
+        return vks2Ps__(vks, vMat)
+    else:
+        lbs = np.unique(vks)
+        lbs = lbs[lbs != 0]
+        lbRas = {}
+        for lb in lbs:
+            lv = TLDIC[lb]
+            lbRas[lv] = vks2Ps__(vks == lb, vMat)
+    return lbRas
 
 def addFid(p=OP, mNam='', dia=3):
     """添加标记点"""
@@ -1014,6 +1457,67 @@ def vCir30(nor=NZ, rad=1., cp=OP, mNam=''):
         ps2cFids(cir, mNam, None, 1, 1.)
     return cir, lambda r, p=cp: bCir_*r+p
 
+def psMic(pds, inGps=None, nor=None, stp=1.0, mNam='', mxIt=20):
+    """计算点集的最大内切圆"""
+    ps = getArr(pds)
+    psT = kdT(ps)
+    
+    if nor is None:
+        nor = psFitPla(ps)
+    else:
+        nor = ndA(nor)
+        if nor.shape == (2,3):
+            nor, drt = nor
+            
+    if inGps is None:
+        gCp = ps.mean(0)
+        mnDt = findPs(ps, gCp)[1]
+        gps = obGps(ps, nor, flat=True)
+        inGps = gps[kdOlbs_(gps, mnDt, gCp, False)[0]]
+    else:
+        inGps = getArr(inGps)
+        if pds is None:
+            gCp = inGps.mean(0)
+            mnDt = findPs(ps, gCp)[1]
+
+    cir_ = vCir30(nor)[-1]
+
+    def mnMx(gps):
+        """找到最优点和实际半径"""
+        dts = psT.query(gps, k=1)[0]
+        mxId = np.argmax(dts)
+        cp = gps[mxId]
+        rad = psT.query(cp[None], k=1)[0][0]
+        return cp, rad
+
+    cp, rad = mnMx(inGps)
+    best_cp, best_rad = cp, rad
+    i = 0
+
+    while (stp >= EPS and i < mxIt):
+        ps_ = cir_(stp, cp)
+        cp_, rad_ = mnMx(ps_)
+
+        rOpt = (rad_ - rad) / rad
+        dOpt = norm(cp-cp_) / (stp * 2.0)
+
+        if (dOpt <= 1.0 and rOpt > -0.05 and rOpt/dOpt > -0.1):
+            cp, rad = cp_, rad_
+            if rad > best_rad:
+                best_cp, best_rad = cp, rad
+
+        stp *= 0.7
+        i += 1
+
+    cp, rad = best_cp, best_rad
+
+    actual_rad = psT.query(cp[None], k=1)[0][0]
+    if abs(actual_rad - rad) > EPS:
+        print(f"警告: 实际半径({actual_rad:.4f})与计算半径({rad:.4f})不匹配")
+        rad = actual_rad
+    arr = vCir30(nor, rad, cp, mNam)[0]
+    return cp, rad, arr
+
 def lnXpln(pn, p0, p1=None):
     """计算平面和直线的交点"""
     p, n = ndA(pn)
@@ -1028,24 +1532,360 @@ def lnXpln(pn, p0, p1=None):
     def dt(p=p): return np.dot(p - p0, n) / d
     return p0 + dt() * v, dt
 
-# ========== 相关API接口整理 ==========
-__all__ = [
-    'p2pLn', 'p3Cone', 'findPs', 'psRoll_', 'psFitPla',
-    'pdCln', 'cnnEx', 'spCnnex', 'pds2Mod', 'ls2dic_',
-    'getPd', 'arr2pd', 'clonePd', 'getNod', 'getArr',
-    'pdBbx', 'getObt', 'obBx', 'obGps', 'addRoi',
-    'pdCp', 'addFid', 'ps2cFids', 'pdPj',
-    'psPj', 'oriMat', 'kdOlbs_', 'mxNorPs_',
-    'rayCast', 'log_', 'zoom', 'c2s_', 
-    'dic2Pd', 'pd2Dic', 'lsDic',
-    'pdAndPds', 'vtkGridPln', 
-    'vtkPush', 'p3Angle',
-    'rdrgsRot', 
-    'thrGrid',
-]
+def erod_(msk, gps, its=3, sp=0, r=1/3):
+    """分离弱连接区域并保留主体"""
+    msk = ndA(msk)
+    s = np.array([[0, r, 0], [r, 1, r], [0, r, 0]])
+    edMsk = erod(msk, s, its)
+    lbs, num = scLb(edMsk)
+    
+    if sp is not None:
+        if np.all(sp == 0):
+            msk_ = (lbs == delBdMsk_(lbs))
+        else:
+            try:
+                spId = findPs(gps, sp)[-1]
+                spLb = lbs[spId]
+                msk_ = (lbs == spLb)
+            except:
+                print("警告: 种子点处理失败，使用最大连通区域")
+                msk_ = (lbs == delBdMsk_(lbs))
+    else:
+        msk_ = (lbs == delBdMsk_(lbs))
+    
+    ctPs = gps[msk_^dila_(msk_, 1)]
+    ctPs = psLbs(ctPs)
+    return gps[msk_], ctPs
 
-# ========== 文件结尾注释 ========== 
-# 裁切相关API全部集中于本文件，便于统一维护和调用。
+def delBdMsk_(lbs_, mxCnt=10):
+    """判断区域是否接触边界并按点数筛选"""
+    if not isinstance(lbs_, np.ndarray):
+        raise TypeError("Input must be a numpy array")
+    if lbs_.ndim != 2 or lbs_.size == 0:
+        return np.array([], dtype=int)
+
+    bdMsk = np.zeros_like(lbs_, dtype=bool)
+    bdMsk[[0, -1], :] = bdMsk[:, [0, -1]] = True
+    
+    msk = ~np.isin(lbs_, np.unique(lbs_[bdMsk]))
+    
+    cnts = np.bincount(lbs_.ravel() * msk.ravel())
+    mxLb = np.array([np.argmax(cnts[1:])+1])
+    
+    return mxLb.astype(int)
+
+def dila_(msk, delCt=3, knlTyp='enhanced', r=.3, lb=None):
+    """增强型膨胀操作"""
+    if knlTyp == 'full':
+        s = np.ones((3,3)) * r
+    elif knlTyp == 'cross':
+        s = np.array([[0, r, 0], [r, r, r], [0, r, 0]])
+    elif knlTyp == 'enhanced':   
+        s = np.array([[0, r, r, r, 0], [r, r, r, r, r], [r, r, r, r, r],
+                      [r, r, r, r, r], [0, r, r, r, 0]])
+    
+    for _ in range(delCt):
+        msk = dila(msk, s)
+        msk |= dila(msk, np.array([[0, r, 0], [r, r, r], [0, r, 0]]))
+    
+    return msk
+
+def psLbs(ps, num=1, rad=1.0, mnSps=5, ax=2, mNam=''):
+    """聚类点云分群函数"""
+    from sklearn.cluster import DBSCAN
+    ps = getArr(ps)
+    if rad is None:
+        from sklearn.neighbors import NearestNeighbors
+        def kDst_():
+            nbs = NearestNeighbors(n_neighbors=mnSps)
+            nbs.fit(ps)
+            dsts, _ = nbs.kneighbors(ps)
+            return dsts[:, -1]
+        rad = np.percentile(kDst_(), 95)
+        print(f"自动计算邻域半径: {rad:.2f} mm")
+    
+    clt = DBSCAN(rad, min_samples=mnSps).fit(ps)
+    cLbs_ = clt.labels_
+    lbs_ = np.unique(cLbs_[cLbs_ >= 0])
+    num_ = len(lbs_)
+    
+    if num is not None:
+        if num_ < num:
+            print(f"警告：可能过分割，建议减小rad（当前{rad}）或增大mnSps（当前{mnSps}）")
+        elif np.sum(clt.labels_ == -1) > len(ps)*0.3:
+            print(f"警告：噪声点超过30%，建议增大rad（当前{rad}）或减小mnSps（当前{mnSps}）")
+        
+        if num == 1:
+            cnts = np.bincount(cLbs_[cLbs_ >= 0])
+            mxLb = np.argmax(cnts)
+            cPs = ps[cLbs_ == mxLb]
+            if mNam != '': 
+                pds2Mod(cPs, mNam=mNam)
+            return cPs
+            
+        if num_ > num:
+            sizes = [(lb, np.sum(cLbs_ == lb)) for lb in lbs_]
+            stLbs = sorted(sizes, key=lambda x: x[1])[-num:]
+            lbs_ = np.array([lb for lb, _ in stLbs])
+            
+        clts = []
+        meds = []
+        
+        for lb in lbs_:
+            clt = ps[cLbs_ == lb]
+            clts.append(clt)
+            meds.append(np.median(clt[:, ax]))
+        
+        stClts = [clts[i] for i in np.argsort(meds)]
+    else:
+        stClts = [ps[cLbs_ == lb] for lb in lbs_]
+        
+    if mNam:
+        for i, cPs in enumerate(stClts):
+            pds2Mod(cPs, mNam=f"{mNam}_{i}")
+    
+    return stClts
+
+class CtPj:
+    """计算投影轮廓和内部网格点集的类"""
+    def __init__(self, pds, pjNor=None, cJp=None, sp=None, clean=False, eSp=None,
+                mNam='', rad=1/3, thr=None):
+        self.pds = getArr(pds)
+        self.pd = getPd(pds)
+        if self.pds is None or len(self.pds) == 0:
+            raise ValueError("输入点集为空")
+            
+        self.cJp = ndA(cJp if cJp is not None else self.pds.mean(0))
+        self.sp = sp
+        self.mNam = mNam
+        self.r = rad
+        self.thr = thr if thr is not None else self.r * 0.1
+        self.eSp = eSp
+        
+        if pjNor is not None:
+            pjNor = ndA(pjNor)
+            if pjNor.ndim==2: 
+                _, self.pjNor, self.sDrt = self.ras = pjNor
+            else: 
+                self.pjNor = pjNor; self.ras = None
+            self.pjPs_ = psPj(self.pds, (self.cJp, self.pjNor), 
+                            mNam=sNam(mNam, 'pjPs_'), exTyp=None)
+        else:
+            self.pjPs_ = self.pds
+            self.pjNor = psFitPla(self.pjPs_)
+        
+        if pjNor.ndim==2:
+            self.sDrt = pjNor[2]
+        
+        if clean:
+            self.pjPs = cleanPj(cnnEx(self.pjPs_), mNam=sNam(mNam, 'pjPs'))
+        else:
+            self.pjPs = getArr(cnnEx(self.pjPs_, exTyp='Lg'))
+        
+        self.gps = obGps(self.pjPs, 
+                    self.ras if self.ras is not None else self.pjNor, 
+                    stp=1/3, mNam=sNam(mNam, 'gps'))    
+        _, pjT, kdO_ = kdOlbs_(self.pjPs, 1.)
+        inds = kdO_(self.gps)
+        gMsk = np.where(inds > 0, 0, 1)
+        
+        try:            
+            bMsk = np.zeros_like(gMsk, dtype=bool)
+            bMsk[[0, -1], :] = gMsk[[0, -1], :] == 1
+            bMsk[:, [0, -1]] = gMsk[:, [0, -1]] == 1
+            stt = np.ones((3, 3), dtype=bool)
+            bds = dila(bMsk, stt, -1, gMsk==1)
+            self.msk = gMsk.copy()
+            self.msk[bds] = 0
+            if self.sp is not None:
+                spId = findPs(self.gps, self.sp)[-1]
+                lbs, num = scLb(self.msk)
+                if num > 0:
+                    sLb = lbs[spId]
+                    self.msk = lbs==sLb
+            
+            self.inGps = self.gps[self.msk>0]
+            pds2Mod(self.inGps, sNam(mNam, 'inGps'))
+            ctId = pjT.query(self.inGps)[1]
+            self.ctPs = self.pjPs[ctId]
+            pds2Mod(self.ctPs, sNam(mNam, 'ctPs'))
+        except Exception as e:
+            print(f"CtPj初始化失败: {str(e)}")
+            self.inGps = np.array([])
+            self.ctPs = np.array([])
+            self.pjPs_ = self.pjPs = np.array([])
+            raise        
+    
+    def mic(self):
+        """计算最大内切圆"""
+        if not hasattr(self, 'inGps') or len(self.inGps) == 0:
+            self.inGps = np.array([])
+            
+        try:
+            pds2Mod(self.ctPs, mNam=sNam(self.mNam, 'ctPs'))
+            pds2Mod(self.inGps, mNam=sNam(self.mNam, 'iPs_'))
+            cp, rad, mic = psMic(self.ctPs, self.inGps, self.pjNor,
+                                mNam=sNam(self.mNam, 'ctMic'))
+            return cp, rad, mic, self.ctPs
+        except Exception as e:
+            print(f"计算最大内切圆失败: {str(e)}")
+            raise
+
+    def edPs(self):
+        """计算椭圆弧"""
+        try:
+            inGps, self.bdPs = ctBd_ed(self.msk, self.gps, 9)
+            if len(inGps) == 0:
+                raise ValueError("未找到有效内部点")
+                
+            pds2Mod(inGps, mNam=sNam(self.mNam, 'iPs'))
+            
+            rjPs_ = self.pds[kdT(self.pjPs_).query(inGps)[1]]
+            pds2Mod(rjPs_, mNam=sNam(self.mNam, 'rjPs_'))
+            
+            eIps, eSps = psLbs(rjPs_, 2, 2)
+            if len(eSps) == 0 or len(eIps) == 0:
+                raise ValueError("分终板计算失败")
+            
+            cp_ = findPs(eSps, self.cJp)[0]
+            cp_ = cp_-self.pjNor*2
+            eSps = dotPlnX(eSps, (cp_, self.pjNor), 1.)
+            pds2Mod(eSps, mNam=sNam(self.mNam, 'eSps'))
+            
+            sDrt = psFitPla(eSps)
+            if not any(sDrt):
+                raise ValueError("椎体方向计算失败")
+                
+            vbIps = psPj(inGps, (self.cJp, sDrt))
+            self.iPs = psPj(self.ctPs, (self.cJp, sDrt))
+            
+            pds2Mod(vbIps, mNam=sNam(self.mNam, 'vbIps'))
+            pds2Mod(self.iPs, mNam=sNam(self.mNam, 'Ips'))
+            
+            return eSps, eIps, sDrt, vbIps, self.iPs
+            
+        except Exception as e:
+            print(f"椭圆弧计算失败: {str(e)}")
+            return np.array([]), np.array([]), np.array([0,0,1]), np.array([]), np.array([])
+
+    def sCt(self):
+        """计算椎体截面"""
+        try:
+            pds2Mod(self.ctPs, mNam=sNam(self.mNam, 'ctPs'))
+            
+            rjPs = self.pds[kdT(self.pjPs_).query(self.ctPs)[1]]
+            
+            pjs = (rjPs-self.cJp) @ self.pjNor
+            rjPs = rjPs[pjs>0]
+            ctPs = self.ctPs[pjs>0]
+            pds2Mod(rjPs, mNam=sNam(self.mNam, 'rjPs'))
+            return self.inGps, ctPs, rjPs
+        except Exception as e:
+            print(f"计算椎体截面失败: {str(e)}")
+            return np.array([]), np.array([]), np.array([])
+
+def ctBd_ed(lbs, gps, delCt=3):
+    """计算轮廓边界点并删除指定层数"""
+    msk = (lbs == 1).copy()
+    
+    bdy = np.zeros_like(msk, dtype=bool)
+    bdy[1:] |= (msk[1:] ^ msk[:-1])
+    bdy[:-1] |= (msk[:-1] ^ msk[1:])
+    bdy[:, 1:] |= (msk[:, 1:] ^ msk[:, :-1])
+    bdy[:, :-1] |= (msk[:, :-1] ^ msk[:, 1:])
+    
+    bdy &= (lbs == 0)
+    ids = np.argwhere(bdy)
+    
+    xC, yC = {}, {}
+    for x, y in ids:
+        xC.setdefault(x, []).append(y)
+        yC.setdefault(y, []).append(x)
+    
+    for y, xs in yC.items():
+        msk[:, y] = 0
+        msk[min(xs):max(xs)+1, y] = 1
+    
+    for x, ys in xC.items():
+        msk[x, :] = 0
+        msk[x, min(ys):max(ys)+1] = 1
+
+    if delCt > 0:
+        return erod_(msk, gps, delCt)
+    
+    iPs = gps[msk]
+    ctPs = gps[msk^dila_(msk, 1)]
+    
+    return iPs, ctPs
+
+def cleanPj(pjPd, pn=None, r=.3, thr=2, mNam='vtCt'):
+    """清理投影点"""
+    if pn is not None:
+        pjPd = getNod(pjPd)
+        ps = psPj(pjPd, pn)
+    ps = getArr(pjPd)
+    ctPs = kdCt_(ps)
+    ctPs = psLbs(ctPs, mNam=mNam)
+    return ctPs
+
+def kdCt_(ctPs, r=.3, thr=2, cp=None, rad=1., mNam=''):
+    """去除平面点集轮廓内的孤立岛点集"""
+    ctPs = getArr(ctPs)
+    if cp is None:
+        cp = ctPs.mean(0)
+    lbs_, _, kdx_ = kdOlbs_(ctPs, r)
+    ps_ = ctPs[lbs_>thr]
+    lens = kdx_(cp, rad)    
+    if lens>0:
+        lbs=kdx_(ps_, r=rad)
+        ps = ps_[lbs>lens]
+    else:
+        ps = ps_
+    if mNam != '':
+        pds2Mod(ps, mNam=mNam)
+    return ps
+
+def readVtk(filePath):
+    """读取VTK文件"""
+    reader = vtk.vtkPolyDataReader()
+    reader.SetFileName(filePath)
+    reader.Update()
+    polyData = reader.GetOutput()
+    return polyData
+
+def pdTf(mPd, p0=OP, go=OP, nor=None, oMat=None, goX=0., goY=0., goZ=0.,
+         rotY=0., rotZ=0., rotX=0., sca=(1., 1., 1.), cyl=False, delMpd=False, mNam=''):
+    """PolyData变换"""
+    pd = getPd(mPd)
+    if p0 is None:
+        p0 = pdCp(pd)
+    if (go != OP).any():
+        nor = psDst(go-p0)[0]
+        if cyl:
+            p0 = (p0+go)/2
+        rotZ = -90
+    if oMat is None and nor is not None:
+        oMat = oriMat(nor)
+    tf = vtk.vtkTransform()
+    tf.Translate(p0)
+    if nor is not None:
+        tf.Concatenate(oMat)
+        tf.RotateZ(rotZ)
+    else:
+        tf.RotateX(rotX)
+        tf.RotateY(rotY)
+        tf.RotateZ(rotZ)
+        tf.Scale(sca)
+        tf.Translate(goX, goY, goZ)
+
+    tfPd = vtk.vtkTransformPolyDataFilter()
+    tfPd.SetTransform(tf)
+    tfPd.SetInputData(pd)
+    tfPd.Update()
+    pd = tfPd.GetOutput()
+    if delMpd is True and isinstance(mPd, MD):
+        SCEN.RemoveNode(mPd)
+    return getNod(pd, mNam)
 
 print('funEnd')
 #%%

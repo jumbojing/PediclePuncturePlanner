@@ -342,6 +342,20 @@ def pdCln(Pd):
     cleaner.Update()
     return cleaner.GetOutput()
 
+# ========== 裁切相关依赖导入 ==========
+import numpy as np
+import vtk
+import slicer
+try:
+    from .vtkCut import (
+        vtkcrop, vtkPln, vtkPlns, vtkCut, dotCut, dotPlnX, DotCut,
+        vtkPlnCrop, rePln_, addPlns, vtkCplnCrop, vtkPs, vtkNors, SPln, ps_pn, dotPn
+    )
+except ImportError:
+    from vtkCut import (
+        vtkcrop, vtkPln, vtkPlns, vtkCut, dotCut, dotPlnX, DotCut,
+        vtkPlnCrop, rePln_, addPlns, vtkCplnCrop, vtkPs, vtkNors, SPln, ps_pn, dotPn
+    )
 
 def cnnEx(mPd, mNam='', *, sp=None, exTyp: Lit['All', 'Lg', None] = None, pdn=False):
     """连通区提取"""
@@ -1014,6 +1028,67 @@ def vCir30(nor=NZ, rad=1., cp=OP, mNam=''):
         ps2cFids(cir, mNam, None, 1, 1.)
     return cir, lambda r, p=cp: bCir_*r+p
 
+def psMic(pds, inGps=None, nor=None, stp=1.0, mNam='', mxIt=20):
+    """计算点集的最大内切圆"""
+    ps = getArr(pds)
+    psT = kdT(ps)
+    
+    if nor is None:
+        nor = psFitPla(ps)
+    else:
+        nor = ndA(nor)
+        if nor.shape == (2,3):
+            nor, drt = nor
+            
+    if inGps is None:
+        gCp = ps.mean(0)
+        mnDt = findPs(ps, gCp)[1]
+        gps = obGps(ps, nor, flat=True)
+        inGps = gps[kdOlbs_(gps, mnDt, gCp, False)[0]]
+    else:
+        inGps = getArr(inGps)
+        if pds is None:
+            gCp = inGps.mean(0)
+            mnDt = findPs(ps, gCp)[1]
+
+    cir_ = vCir30(nor)[-1]
+
+    def mnMx(gps):
+        """找到最优点和实际半径"""
+        dts = psT.query(gps, k=1)[0]
+        mxId = np.argmax(dts)
+        cp = gps[mxId]
+        rad = psT.query(cp[None], k=1)[0][0]
+        return cp, rad
+
+    cp, rad = mnMx(inGps)
+    best_cp, best_rad = cp, rad
+    i = 0
+
+    while (stp >= EPS and i < mxIt):
+        ps_ = cir_(stp, cp)
+        cp_, rad_ = mnMx(ps_)
+
+        rOpt = (rad_ - rad) / rad
+        dOpt = norm(cp-cp_) / (stp * 2.0)
+
+        if (dOpt <= 1.0 and rOpt > -0.05 and rOpt/dOpt > -0.1):
+            cp, rad = cp_, rad_
+            if rad > best_rad:
+                best_cp, best_rad = cp, rad
+
+        stp *= 0.7
+        i += 1
+
+    cp, rad = best_cp, best_rad
+
+    actual_rad = psT.query(cp[None], k=1)[0][0]
+    if abs(actual_rad - rad) > EPS:
+        print(f"警告: 实际半径({actual_rad:.4f})与计算半径({rad:.4f})不匹配")
+        rad = actual_rad
+    arr = vCir30(nor, rad, cp, mNam)[0]
+    return cp, rad, arr
+
 def lnXpln(pn, p0, p1=None):
     """计算平面和直线的交点"""
     p, n = ndA(pn)
@@ -1027,25 +1102,6 @@ def lnXpln(pn, p0, p1=None):
         raise ValueError('plnXln: The line is parallel to the plane.')
     def dt(p=p): return np.dot(p - p0, n) / d
     return p0 + dt() * v, dt
-
-# ========== 相关API接口整理 ==========
-__all__ = [
-    'p2pLn', 'p3Cone', 'findPs', 'psRoll_', 'psFitPla',
-    'pdCln', 'cnnEx', 'spCnnex', 'pds2Mod', 'ls2dic_',
-    'getPd', 'arr2pd', 'clonePd', 'getNod', 'getArr',
-    'pdBbx', 'getObt', 'obBx', 'obGps', 'addRoi',
-    'pdCp', 'addFid', 'ps2cFids', 'pdPj',
-    'psPj', 'oriMat', 'kdOlbs_', 'mxNorPs_',
-    'rayCast', 'log_', 'zoom', 'c2s_', 
-    'dic2Pd', 'pd2Dic', 'lsDic',
-    'pdAndPds', 'vtkGridPln', 
-    'vtkPush', 'p3Angle',
-    'rdrgsRot', 
-    'thrGrid',
-]
-
-# ========== 文件结尾注释 ========== 
-# 裁切相关API全部集中于本文件，便于统一维护和调用。
 
 print('funEnd')
 #%%

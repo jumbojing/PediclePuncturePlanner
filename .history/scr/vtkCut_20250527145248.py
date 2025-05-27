@@ -526,7 +526,7 @@ def SPln(
 
 # ========== 裁切相关API接口整理 ==========
 __all__ = [
-    'vtkPln', 'vtkPlns', 'vtkCut', 'dotCut', 'dotPlnX', 'DotCut',
+    'vtkcrop', 'vtkPln', 'vtkPlns', 'vtkCut', 'dotCut', 'dotPlnX', 'DotCut',
     'vtkPlnCrop', 'rePln_', 'addPlns', 'vtkCplnCrop', 'vtkPs', 'vtkNors', 'SPln', 'ps_pn', 'dotPn'
 ]
 

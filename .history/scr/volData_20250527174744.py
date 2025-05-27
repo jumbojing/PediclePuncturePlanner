@@ -13,11 +13,12 @@ import SimpleITK as sitk
 from sitkUtils import PullVolumeFromSlicer, PushVolumeToSlicer
 
 # 从pppUtil导入必要的函数（假设已经存在）
-from pppUtil import *
+from .util import *
 # 定义备用常量
 EPS = 1e-6
 OP = np.zeros(3)
 TLDIC = {}
+
 # 简写函数
 puSk = PullVolumeFromSlicer
 skPu = PushVolumeToSlicer
@@ -580,52 +581,6 @@ def vks2Ras(vmData, vks=None, lbs: bool = False):
     return label_ras
 
 
-def ras2vks(ps, reVol=None, lb=1, pvks=True, mNam=''):
-    """将RAS坐标系中的点集转换为体素坐标系"""
-    if reVol is None:
-        reVol = SCEN.GetFirstNodeByClass(LVOL)
-    else:
-        reVol = getNod(reVol)
-
-    mat = getR2iMat(reVol)
-    vArr = getArr(reVol)
-
-    ps = getArr(ps)
-    pShp = ps.shape
-    if len(pShp) > 2:
-        ps = nx3ps_(ps)
-
-    ps1 = np.ones((len(ps), 1))
-    ps4 = np.hstack((ps, ps1))
-
-    ijk = (ps4 @ mat.T)[:, :3]
-    ijk = ijk.astype(int)
-
-    ijk = np.clip(ijk, a_min=0, a_max=ndA(vArr.shape)[::-1] - 1)
-
-    z = ijk[:, 0]
-    y = ijk[:, 1]
-    x = ijk[:, 2]
-
-    if pvks:
-        varr = vArr.copy()
-        varr = vArr[x, y, z]
-        if lb != 0:
-            varr = np.where(varr != 0, lb, 0)
-        if len(pShp) > 2:
-            varr = varr.reshape(pShp[:-1])
-        return varr, ijk
-
-    mArr = np.zeros_like(vArr)
-    mArr[x, y, z] = lb
-    if lb == 0:
-        mArr[x, y, z] = 1
-        mArr *= vArr
-    if mNam != '':
-        vol = volClone(reVol, mNam)
-        slicer.util.updateVolumeFromArray(vol, mArr)
-    return mArr
-
 def readIsoCT(ctF, mNam: str = '', isLb: bool = True, cstU8: bool = True):
     """读取CT并初始化（优化版）"""
     target_spacing = (1.0, 1.0, 1.0)
@@ -720,23 +675,6 @@ def arr2vol(vol: Union[slicer.vtkMRMLVolumeNode, str] = None, arr=0, mNam: str =
     
     return volData(cVol) if rtnVd else cVol
 
-def getI2rMat(vol, isArr=True):
-    """获取IJK到RAS变换矩阵"""
-    vol = getNod(vol)
-    mat = vtk.vtkMatrix4x4()
-    vol.GetIJKToRASMatrix(mat)
-    if isArr:
-        return slicer.util.arrayFromVTKMatrix(mat)
-    return mat
-
-def getR2iMat(vol, arr=True):
-    """获取RAS到IJK变换矩阵"""
-    vol = getNod(vol)
-    mat = vtk.vtkMatrix4x4()
-    vol.GetRASToIJKMatrix(mat)
-    if arr:
-        return slicer.util.arrayFromVTKMatrix(mat)
-    return mat
 
 def cropVol(vol, roi=None, mNam: str = '', cArr=None, delV: bool = True):
     """裁剪体素（优化版）"""
@@ -796,12 +734,3 @@ def volClone_backup(vol, nam=''):
     except:
         print("警告: 无法克隆体素")
         return vol
-    
-# ========== 裁切相关API接口整理 ==========
-__all__ = [
-    'volData', 'vks2Ras', 'ras2vks', 'readIsoCT', 'arr2vol',
-    'getI2rMat', 'getR2iMat', 'cropVol', 'volClone_backup'
-]
-
-# ========== 文件结尾注释 ========== 
-# 裁切相关API全部集中于本文件，便于统一维护和调用。    

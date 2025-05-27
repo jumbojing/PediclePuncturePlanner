@@ -2,7 +2,9 @@
 import numpy as np
 import vtk
 import slicer
-from pppUtil import *
+from .pppUtil import (
+    getNod, getArr, ndA, nx3ps_, isLs, pds2Mod, cnnEx, sNam, SNOD, PS
+)
 from vtk.util.numpy_support import numpy_to_vtk
 
 def dotPn(ps, pn):
@@ -526,7 +528,7 @@ def SPln(
 
 # ========== 裁切相关API接口整理 ==========
 __all__ = [
-    'vtkPln', 'vtkPlns', 'vtkCut', 'dotCut', 'dotPlnX', 'DotCut',
+    'vtkcrop', 'vtkPln', 'vtkPlns', 'vtkCut', 'dotCut', 'dotPlnX', 'DotCut',
     'vtkPlnCrop', 'rePln_', 'addPlns', 'vtkCplnCrop', 'vtkPs', 'vtkNors', 'SPln', 'ps_pn', 'dotPn'
 ]
 

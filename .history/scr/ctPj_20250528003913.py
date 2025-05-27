@@ -702,11 +702,3 @@ def psMic(pds, inGps=None, nor=None, stp=1.0, mNam='', mxIt=20):
     arr = vCir30(nor, rad, cp, mNam)[0]
     return cp, rad, arr
 
-# ========== ctPj相关API接口整理 ==========
-__all__ = [
-    'CtPj', 'ctBd_ed', 'cleanPj', 'kdCt_', 'erod_',
-    'delBdMsk_', 'dila_', 'psLbs', 'psMic'
-]
-
-# ========== 文件结尾注释 ========== 
-# 裁切相关API全部集中于本文件，便于统一维护和调用。
